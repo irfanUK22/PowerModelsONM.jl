@@ -332,29 +332,38 @@ function constraint_mc_transformer_power_yy_block_on_off(pm::PMD.LPUBFDiagModel,
             JuMP.@constraint(pm.model, w_fr[fc] == (pol*tm_scale)^2*tmsqr_w_to)
 
             # with regcontrol
+            #The linearized voltage regulator control constraints (which previously was commented-out, regcontrol part) worked perfectly. I successfully tested the Black Start Restoration (BSR) formulation on this system.
             if haskey(transformer,"controls")
                 # TODO: fix LPUBFDiag version of transformer controls for on_off
-                # v_ref = transformer["controls"]["vreg"][idx]
-                # δ = transformer["controls"]["band"][idx]
-                # r = transformer["controls"]["r"][idx]
-                # x = transformer["controls"]["x"][idx]
+                 v_ref = transformer["controls"]["vreg"][idx]
+                 δ = transformer["controls"]["band"][idx]
+                 r = transformer["controls"]["r"][idx]
+                 x = transformer["controls"]["x"][idx]
 
                 # # linearized voltage squared: w_drop = (2⋅r⋅p+2⋅x⋅q)
-                # w_drop = JuMP.@expression(pm.model, 2*r*p_to[idx] + 2*x*q_to[idx])
+                 w_drop = JuMP.@expression(pm.model, 2*r*p_to[idx] + 2*x*q_to[idx])
 
                 # # (v_ref-δ)^2 ≤ w_fr-w_drop ≤ (v_ref+δ)^2
                 # # w_fr/1.1^2 ≤ w_to ≤ w_fr/0.9^2
-                # w_drop_z_block = JuMP.@variable(pm.model, base_name="$(nw)_w_drop_z_block_$(trans_id)_$(idx)")
+                 w_drop_z_block = JuMP.@variable(pm.model, base_name="$(nw)_w_drop_z_block_$(trans_id)_$(idx)")
 
                 # IM.relaxation_product(pm.model, w_drop, z_block, w_drop_z_block; default_x_domain=(0.9^2, 1.1^2), default_y_domain=(0, 1))
+                # Check if w_drop is zero. Forexample in iowa240.dss, the voltage is regulated at the node itself, resulting in r = 0 and x = 0, making w_drop = 0. relaxation function IM.relaxation_product (defined in PowerModelsONM.jl/src/core/base.jl, line 110) requires a valid expression for w_drop. When w_drop = 0, the function fails, causing an error. so the below code will skip relaxation.  
+                if r == 0 && x == 0
+                    w_drop_z_block = w_drop
+                    # or use w_drop_z_block= 0
+                else
+                    # IEEE 123 Node system, where the voltage is regulated at the load center and r and x are non-zero, which need to have IM.relaxation_product of w_drop with z_block to become w_drop_z_block
+                     IM.relaxation_product(pm.model, w_drop, z_block, w_drop_z_block; default_x_domain=(0.9^2, 1.1^2), default_y_domain=(0, 1))
+                end
+                
+                 w_fr_lb = JuMP.has_lower_bound(w_fr[fc]) && JuMP.lower_bound(w_fr[fc]) > 0 ? JuMP.lower_bound(w_fr[fc]) : 0.9^2
+                 w_fr_ub = JuMP.has_upper_bound(w_fr[fc]) && isfinite(JuMP.upper_bound(w_fr[fc])) ? JuMP.upper_bound(w_fr[fc]) : 1.1^2
 
-                # w_fr_lb = JuMP.has_lower_bound(w_fr[fc]) && JuMP.lower_bound(w_fr[fc]) > 0 ? JuMP.lower_bound(w_fr[fc]) : 0.9^2
-                # w_fr_ub = JuMP.has_upper_bound(w_fr[fc]) && isfinite(JuMP.upper_bound(w_fr[fc])) ? JuMP.upper_bound(w_fr[fc]) : 1.1^2
-
-                # JuMP.@constraint(pm.model, w_fr[fc] ≥ z_block * (v_ref - δ)^2 + w_drop_z_block)
-                # JuMP.@constraint(pm.model, w_fr[fc] ≤ z_block * (v_ref + δ)^2 + w_drop_z_block)
-                # JuMP.@constraint(pm.model, w_fr[fc]/w_fr_ub ≤ w_to[tc])
-                # JuMP.@constraint(pm.model, w_fr[fc]/w_fr_lb ≥ w_to[tc])
+                 JuMP.@constraint(pm.model, w_fr[fc] ≥ z_block * (v_ref - δ)^2 + w_drop_z_block)
+                 JuMP.@constraint(pm.model, w_fr[fc] ≤ z_block * (v_ref + δ)^2 + w_drop_z_block)
+                 JuMP.@constraint(pm.model, w_fr[fc]/w_fr_ub ≤ w_to[tc])
+                 JuMP.@constraint(pm.model, w_fr[fc]/w_fr_lb ≥ w_to[tc])
             end
         end
     end
